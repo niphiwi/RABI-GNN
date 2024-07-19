@@ -68,6 +68,7 @@ class AddGridMask:
         data.ground_truth = data.y
         #data.x = data.x * matching_mask.view(-1,1)
         data.known = (torch.ones(750) * matching_mask).bool()
+        data.known = data.known.repeat(data.y.shape[1],1).permute(1,0)
 
         return data
 

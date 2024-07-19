@@ -1,34 +1,26 @@
 import os.path as osp
 from typing import Literal
 from tqdm import tqdm
-import random
 
 import torch
 import torch_geometric.transforms as T
-from torch_geometric.transforms import BaseTransform
 from torch_geometric.data import Data
 from torch_geometric.data import InMemoryDataset
 from torch_geometric.loader import DataLoader
 
 import pytorch_lightning as pl
 
-from utils.transforms import AddMask, Add2DMask, Apply2DMask, AddGridMask, SampleSubgraph
+from utils.transforms import Add2DMask, Apply2DMask
 
-def sequentialize_data(x, seq_len):
+def sequentialize_data(x, seq_len, sliding_step=4):
     r""" Splits the input data into torch.tensor of torch.Size([<number of sampels>, seq_len, 30, 25])
     Init args:
         x (torch.tensor): The data of the synthetic dataset of torch.Size([120, 210, 30, 25])
         seq_len (int): The length of the sequences.
     """
-    # nth_frame = 2
-    
-    
-    # Select only the images that we care about (ruled by nth frame)
-    # idxs = torch.tensor(range(x.shape[1])[::nth_frame])
-    # x = torch.index_select(x, 1, idxs)
 
     # Get the number of sequences, that each source simulation generates
-    sliding_step = 4
+    sliding_step = sliding_step
     n_seq = x[0].unfold(0, seq_len, sliding_step).size()[0]
 
     # Create an empty tensor that is going to be filled up in the loop
@@ -93,23 +85,37 @@ class SyntheticDataset(InMemoryDataset):
         is_grid (bool): A flag for whether to apply grid masking.
     """
     def __init__(self, root: str, type: Literal["train", "valid", "test"], 
-                 seq_len: int=10, radius: float=0.3, n_nodes: int=750, transform=None):
+                 seq_len: int=10, sliding_step: int=4, radius: float=0.3, n_nodes: int=750, transform=None, temporary=False):
         self.type = type.lower()
         self.root = root
         self.seq_len = seq_len
+        self.sliding_step = sliding_step
         self.processed_path = osp.join(root, "processed", self.type, "data.pt")
         self.n_nodes = n_nodes
-        self.grid_n = 5
         self.radius = radius
+        self.temporary = temporary
 
-        self.pre_transform = T.Compose([
-            T.NormalizeScale(),
-            T.RadiusGraph(r=self.radius, loop=True, max_num_neighbors=200),
-            # T.Distance(norm=False),
-            # T.Cartesian(),
-        ])
+        self.normalization_params = {"mean": 2.1744942665100098, "std": 3.9583189487457275}
 
-        self.transform = transform
+        if not self.temporary:
+            self.pre_transform = T.Compose([
+                T.NormalizeScale(),
+                T.RadiusGraph(r=self.radius, loop=True, max_num_neighbors=200),
+            ])
+        else:
+            self.pre_transform = T.Compose([
+                T.NormalizeScale(),
+            ])
+
+        if transform is None:
+            self.transform = T.Compose([
+                T.Distance(norm=False),
+                T.Cartesian(),
+                Add2DMask(0.04, seq_len=10),
+                Apply2DMask(),
+            ])
+        else:
+            self.transform = transform
 
         super().__init__(root, transform=self.transform, pre_transform=self.pre_transform)
         self.load(self.processed_paths[0])
@@ -121,7 +127,7 @@ class SyntheticDataset(InMemoryDataset):
 
     @property
     def processed_dir(self) -> str:
-        return osp.join(self.root, f"processed_radius{self.radius}_seqlen_{self.seq_len}", self.type)
+        return osp.join(self.root, f"processed_radius{self.radius}_seqlen{self.seq_len}_slidingstep{self.sliding_step}", self.type)
         
     @property
     def raw_file_names(self):
@@ -136,10 +142,19 @@ class SyntheticDataset(InMemoryDataset):
     
     def process(self):
         data = torch.load(self.raw_paths[0])
-        data = sequentialize_data(data, self.seq_len)
+        data = sequentialize_data(data, self.seq_len, self.sliding_step)
         data_list = create_graphs(data, self.pre_transform)
         
         self.save(data_list, self.processed_paths[0])
+
+    def get(self, idx):
+        if not self.temporary:
+            data = super().get(idx)
+        else:
+            data = super().get(idx)
+            data = T.RadiusGraph(r=self.radius, loop=True, max_num_neighbors=200)(data)
+            
+        return data
 
 # ~~~~~~~~~~~
 # DATAMODULE
@@ -158,9 +173,6 @@ class SyntheticDataModule(pl.LightningDataModule):
         self.radius = radius
         self.transform = transform
 
-        # self.train_dir = osp.join("30x25", 'trainvalid.pt')
-        # self.val_dir = osp.join("30x25", 'trainvalid.pt')
-        # self.test_dir = osp.join("30x25", 'test.pt')
 
 
     def setup(self, stage: str):
@@ -168,8 +180,8 @@ class SyntheticDataModule(pl.LightningDataModule):
         self.train_dataset = SyntheticDataset(root="data/30x25", type="train", radius=self.radius, transform=self.transform)  
         # Val     
         self.val_dataset = SyntheticDataset(root="data/30x25", type="valid", radius=self.radius, transform=self.transform)  
-        # # Test
-        # self.test_dataset = SyntheticDataset(root="data/30x25", type="test", radius=0.3)   
+        # Test
+        self.test_dataset = SyntheticDataset(root="data/30x25", type="test", radius=self.radius, transform=self.transform)  
     
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=self.shuffle, num_workers=self.num_workers)
@@ -177,5 +189,5 @@ class SyntheticDataModule(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
     
-    # def test_dataloader(self):
-    #     return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset, batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)

@@ -113,6 +113,19 @@ def sort_positions(data):
 #     return sort_positions(upscaled_data)
 
 def add_virtual_nodes(data, cell_size, radius: float=0.3, x_range=None, y_range=None):
+    """ Add virtual nodes to the graph. Nodes are added in-between the existing nodes
+    based on a discretized grid. Cell_size is governing the size of the discretized grid cells. 
+        Input:
+            data: Data object   # original data
+            cell_size: float    # size of the grid cells
+            radius: float       # optional - radius for the graph
+            x_range: tuple      # optional - range of x values [in meters]
+            y_range: tuple      # optional - range of y values [in meters]
+        Output: 
+            upscaled_data: Data object
+    """
+
+
     seq_len = data.x.shape[1]
     # ~~~~~~~~~~~~
     # CREATE GRID
@@ -179,7 +192,7 @@ def add_virtual_nodes(data, cell_size, radius: float=0.3, x_range=None, y_range=
         )
     
     upscaled_data = T.NormalizeScale()(upscaled_data)
-    upscaled_data = T.RadiusGraph(r=radius, loop=True, max_num_neighbors=200)(upscaled_data)
+    upscaled_data = T.RadiusGraph(r=radius, loop=True, max_num_neighbors=500)(upscaled_data)
     upscaled_data = T.Distance(norm=False)(upscaled_data)
     upscaled_data = T.Cartesian()(upscaled_data)
     
